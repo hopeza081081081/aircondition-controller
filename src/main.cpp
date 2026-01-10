@@ -32,6 +32,7 @@ TaskHandle_t otaTask = NULL;
 TaskHandle_t mqttTask = NULL;
 TaskHandle_t pzemTask = NULL;
 TaskHandle_t ledTask = NULL;
+TaskHandle_t watchdogTask = NULL;
 
 // Constants
 const char *ssid = "cpciot1";
@@ -44,11 +45,15 @@ const char *mqtt_server = "192.168.1.54";
 const int mqtt_port = 11883;*/
 
 // Timing constants (milliseconds)
-const unsigned long PZEM_READ_INTERVAL = 5000;     // Read PZEM every 5 seconds
-const unsigned long LED_BLINK_INTERVAL = 1000;     // LED blink every 1 second
-const unsigned long WIFI_RECONNECT_TIMEOUT = 60000; // 60 seconds
-const unsigned long MQTT_RECONNECT_TIMEOUT = 30000; // 30 seconds
+const unsigned long PZEM_READ_INTERVAL = 5000;                   // Read PZEM every 5 seconds
+const unsigned long LED_BLINK_INTERVAL = 1000;                   // LED blink every 1 second
+const unsigned long WIFI_RECONNECT_TIMEOUT = 60000;              // 60 seconds
+const unsigned long MQTT_RECONNECT_TIMEOUT = 30000;              // 30 seconds
+const unsigned long AUTO_RESTART_INTERVAL = 12 * 60 * 60 * 1000; // 12 hours
 const int MAX_PZEM_ERRORS = 5;
+
+// Global variables for auto restart
+unsigned long bootMillis = 0;
 
 String clientId = "";
 String deviceTopic = "";
@@ -78,6 +83,7 @@ void handle_ota(void *parameter);
 void handle_mqtt(void *parameter);
 void handle_pzem(void *parameter);
 void handle_led(void *parameter);
+void handle_watchdog(void *parameter);
 void readAndPublishPZEM();
 
 void setup()
@@ -123,6 +129,10 @@ void setup()
     }
 
     setup_wifi();
+
+    // Record boot time for auto restart
+    bootMillis = millis();
+
     client.begin(mqtt_server, mqtt_port, espClient);
     client.onMessage(on_message);
 
@@ -144,21 +154,20 @@ void setup()
     electricalVariableJsonDoc["frequency"] = "null";
 
     // Setup ArduinoOTA
-    ArduinoOTA.onStart([]() {
+    ArduinoOTA.onStart([]()
+                       {
         String type;
         if (ArduinoOTA.getCommand() == U_FLASH)
             type = "sketch";
         else
             type = "filesystem";
-        Serial.println("Start updating " + type);
-    })
-    .onEnd([]() {
-        Serial.println("\nEnd");
-    })
-    .onProgress([](unsigned int progress, unsigned int total) {
-        Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
-    })
-    .onError([](ota_error_t error) {
+        Serial.println("Start updating " + type); })
+        .onEnd([]()
+               { Serial.println("\nEnd"); })
+        .onProgress([](unsigned int progress, unsigned int total)
+                    { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); })
+        .onError([](ota_error_t error)
+                 {
         Serial.printf("Error[%u]: ", error);
         if (error == OTA_AUTH_ERROR)
             Serial.println("Auth Failed");
@@ -169,8 +178,7 @@ void setup()
         else if (error == OTA_RECEIVE_ERROR)
             Serial.println("Receive Failed");
         else if (error == OTA_END_ERROR)
-            Serial.println("End Failed");
-    });
+            Serial.println("End Failed"); });
 
     ArduinoOTA.begin();
 
@@ -182,9 +190,9 @@ void setup()
         "OTA_Handler",
         8096,
         NULL,
-        3,              // Highest priority
+        3, // Highest priority
         &otaTask,
-        0               // Core 0
+        0 // Core 0
     );
 
     // MQTT Task - High priority, Core 1
@@ -193,9 +201,9 @@ void setup()
         "MQTT_Handler",
         8096,
         NULL,
-        2,              // High priority
+        2, // High priority
         &mqttTask,
-        1               // Core 1
+        1 // Core 1
     );
 
     // PZEM Task - Medium priority, Core 1
@@ -204,9 +212,9 @@ void setup()
         "PZEM_Handler",
         4096,
         NULL,
-        1,              // Medium priority
+        1, // Medium priority
         &pzemTask,
-        1               // Core 1
+        1 // Core 1
     );
 
     // LED Task - Low priority, Core 0
@@ -215,9 +223,20 @@ void setup()
         "LED_Handler",
         2048,
         NULL,
-        1,              // Low priority
+        1, // Low priority
         &ledTask,
-        0               // Core 0
+        0 // Core 0
+    );
+
+    // Watchdog Task - Low priority, Core 0
+    xTaskCreatePinnedToCore(
+        &handle_watchdog,
+        "Watchdog_Handler",
+        2048,
+        NULL,
+        1, // Low priority
+        &watchdogTask,
+        0 // Core 0
     );
 
     Serial.println("All tasks created successfully");
@@ -235,7 +254,7 @@ void handle_ota(void *parameter)
     while (true)
     {
         ArduinoOTA.handle();
-        vTaskDelay(10 / portTICK_PERIOD_MS);  // Check OTA every 10ms
+        vTaskDelay(10 / portTICK_PERIOD_MS); // Check OTA every 10ms
     }
 }
 
@@ -252,7 +271,7 @@ void handle_mqtt(void *parameter)
             static unsigned long lastAttempt = 0;
             unsigned long now = millis();
 
-            if (now - lastAttempt >= 5000)  // Try to reconnect every 5 seconds
+            if (now - lastAttempt >= 5000) // Try to reconnect every 5 seconds
             {
                 lastAttempt = now;
                 if (!mqtt_connect())
@@ -262,7 +281,7 @@ void handle_mqtt(void *parameter)
             }
         }
 
-        vTaskDelay(50 / portTICK_PERIOD_MS);  // Check MQTT every 50ms
+        vTaskDelay(50 / portTICK_PERIOD_MS); // Check MQTT every 50ms
     }
 }
 
@@ -272,7 +291,7 @@ void handle_pzem(void *parameter)
     while (true)
     {
         readAndPublishPZEM();
-        vTaskDelay(PZEM_READ_INTERVAL / portTICK_PERIOD_MS);  // Read every 5 seconds
+        vTaskDelay(PZEM_READ_INTERVAL / portTICK_PERIOD_MS); // Read every 5 seconds
     }
 }
 
@@ -332,7 +351,34 @@ void handle_led(void *parameter)
             digitalWrite(LED_BUILTIN, ledState);
         }
 
-        vTaskDelay(100 / portTICK_PERIOD_MS);  // Check every 100ms
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+    }
+}
+
+// ========== Watchdog Task ==========
+void handle_watchdog(void *parameter)
+{
+    while (true)
+    {
+        // Check for auto restart (every 12 hours)
+        unsigned long currentMillis = millis();
+        if (currentMillis - bootMillis >= AUTO_RESTART_INTERVAL)
+        {
+            Serial.println("========================================");
+            Serial.println("Watchdog: Auto restart triggered");
+            Serial.println("Reason: 12 hours uptime elapsed");
+            Serial.printf("Uptime: %lu ms (%.2f hours)\n",
+                          currentMillis - bootMillis,
+                          (currentMillis - bootMillis) / 3600000.0);
+            Serial.println("========================================");
+
+            // Small delay to allow MQTT LWT to be sent
+            delay(1000);
+            ESP.restart();
+        }
+
+        // Check every minute (no need to check frequently)
+        vTaskDelay(60000 / portTICK_PERIOD_MS); // 60 seconds
     }
 }
 
