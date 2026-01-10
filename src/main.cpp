@@ -1,11 +1,11 @@
 /**
- * 
+ *
  * 1. compress measuring message to JSON format.
  * 2. platformio run -t upload --upload-port xxx.xxx.xxx.xxx
  * ainconController1: 10.10.200.60
  * ainconController2: 10.10.200.57
  * ainconController3: 10.10.200.59
- * 
+ *
  * */
 #include <Arduino.h>
 #include <PZEM004Tv30.h>
@@ -70,8 +70,8 @@ void setup()
 {
     Serial.begin(115200);
     WiFi.setAutoReconnect(true);
-    //clientId = "airconController4";
-    //deviceTopic = "myFinalProject/airconController4/";
+    // clientId = "airconController4";
+    // deviceTopic = "myFinalProject/airconController4/";
     if (WiFi.macAddress() == "F0:08:D1:D7:6D:F8")
     {
         clientId = "airconController3";
@@ -88,15 +88,15 @@ void setup()
         deviceTopic = "myFinalProject/airconController1/";
     }
 
-    //EEPROM.begin(1);
+    // EEPROM.begin(1);
     pinMode(LED_BUILTIN, OUTPUT);
     pinMode(25, OUTPUT);
     digitalWrite(25, LOW);
     ledBlink(50, 1000);
     bootCount = EEPROM.read(0);
     bootCount++;
-    //EEPROM.write(0, bootCount);
-    //EEPROM.commit();
+    // EEPROM.write(0, bootCount);
+    // EEPROM.commit();
 
     setup_wifi();
     client.begin(mqtt_server, mqtt_port, espClient);
@@ -123,8 +123,9 @@ void setup()
     electricalVariableJsonDoc["energy"] = "null";
     electricalVariableJsonDoc["frequency"] = "null";
 
-    //pzem.resetEnergy();
-    ArduinoOTA.onStart([]() {
+    // pzem.resetEnergy();
+    ArduinoOTA.onStart([]()
+                       {
                   String type;
                   if (ArduinoOTA.getCommand() == U_FLASH)
                       type = "sketch";
@@ -132,15 +133,13 @@ void setup()
                       type = "filesystem";
 
                   // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
-                  Serial.println("Start updating " + type);
-              })
-        .onEnd([]() {
-            Serial.println("\nEnd");
-        })
-        .onProgress([](unsigned int progress, unsigned int total) {
-            Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
-        })
-        .onError([](ota_error_t error) {
+                  Serial.println("Start updating " + type); })
+        .onEnd([]()
+               { Serial.println("\nEnd"); })
+        .onProgress([](unsigned int progress, unsigned int total)
+                    { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); })
+        .onError([](ota_error_t error)
+                 {
             Serial.printf("Error[%u]: ", error);
             if (error == OTA_AUTH_ERROR)
                 Serial.println("Auth Failed");
@@ -151,8 +150,7 @@ void setup()
             else if (error == OTA_RECEIVE_ERROR)
                 Serial.println("Receive Failed");
             else if (error == OTA_END_ERROR)
-                Serial.println("End Failed");
-        });
+                Serial.println("End Failed"); });
 
     ArduinoOTA.begin();
 
@@ -162,7 +160,7 @@ void setup()
         8096,                // Stack size (bytes)
         NULL,                // Parameter to pass
         2,                   // Task priority
-        &task0,                // Task handle
+        &task0,              // Task handle
         0                    // Core you want to run the task on (0 or 1)
     );
     xTaskCreatePinnedToCore(
@@ -171,7 +169,7 @@ void setup()
         8096,                     // Stack size (bytes)
         NULL,                     // Parameter to pass
         1,                        // Task priority
-        &task1,                     // Task handle
+        &task1,                   // Task handle
         1                         // Core you want to run the task on (0 or 1)
     );
 }
@@ -183,7 +181,7 @@ void loop()
     if (Serial2.available() != 0)
     {
         pzemErrorCount++;
-        Serial.printf("PZEM Error Count: %d\n",pzemErrorCount);
+        Serial.printf("PZEM Error Count: %d\n", pzemErrorCount);
         if (pzemErrorCount >= 5)
         {
             ESP.restart();
@@ -200,16 +198,16 @@ void loop()
         {
             digitalWrite(25, HIGH);
         }
-        else if(cmdFromServer == false)
+        else if (cmdFromServer == false)
         {
             digitalWrite(25, LOW);
         }
     }
-    else if(serverIsOnline == false)
+    else if (serverIsOnline == false)
     {
         digitalWrite(25, LOW);
     }
-    //taskYIELD();
+    // taskYIELD();
 }
 
 void setup_wifi()
@@ -224,10 +222,11 @@ void setup_wifi()
     while (WiFi.status() != WL_CONNECTED)
     {
         wifiReconnectCount++;
-        Serial.printf("(setup_wifi)Reconnect Count: %d\n",wifiReconnectCount);
+        Serial.printf("(setup_wifi)Reconnect Count: %d\n", wifiReconnectCount);
         delay(500);
         Serial.print(".");
-        if(wifiReconnectCount == 120){
+        if (wifiReconnectCount == 120)
+        {
             ESP.restart();
         }
     }
@@ -302,9 +301,9 @@ void mqtt_connect()
         client.publish((deviceTopic + "properties").c_str(), devicePropertiesJsonOutput, true, 2);
 
         Serial.println("MQTT Connected");
-        client.subscribe("myFinalProject/server/electricalAppliances/airconController1/command", 2); //second parameter is QoS.
-        client.subscribe("myFinalProject/server/electricalAppliances/airconController2/command", 2); //second parameter is QoS.
-        client.subscribe("myFinalProject/server/electricalAppliances/airconController3/command", 2); //second parameter is QoS.
+        client.subscribe("myFinalProject/server/electricalAppliances/airconController1/command", 2); // second parameter is QoS.
+        client.subscribe("myFinalProject/server/electricalAppliances/airconController2/command", 2); // second parameter is QoS.
+        client.subscribe("myFinalProject/server/electricalAppliances/airconController3/command", 2); // second parameter is QoS.
         client.subscribe("myFinalProject/server/properties/online", 2);
         Serial.printf("bootcount: %d\n", bootCount);
         Serial.printf("MQTT error code: %d, return code: %d\n", client.lastError(), client.returnCode());
@@ -314,7 +313,8 @@ void mqtt_connect()
         mqttReconnectCount++;
         Serial.printf("MQTT error code: %d, return code: %d\n", client.lastError(), client.returnCode());
         Serial.println("Attempting MQTT connection");
-        if(mqttReconnectCount == 60){
+        if (mqttReconnectCount == 60)
+        {
             ESP.restart();
         }
         digitalWrite(25, LOW);
@@ -392,7 +392,7 @@ void handle_ota(void *parameter)
 
 void handle_mqtt(void *parameter)
 {
-    //vTaskDelay(3000);
+    // vTaskDelay(3000);
     while (true)
     {
         xSemaphoreTake(binarySemaphores[1], portMAX_DELAY);
