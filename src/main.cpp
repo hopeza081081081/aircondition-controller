@@ -137,7 +137,9 @@ void setup()
     client.onMessage(on_message);
 
     // Set up LWT (Last Will and Testament)
-    devicePropertiesJsonDoc["wifiLocalIP"] = WiFi.localIP().toString().c_str();
+    static String ipCacheLWT;
+    ipCacheLWT = WiFi.localIP().toString();
+    devicePropertiesJsonDoc["wifiLocalIP"] = ipCacheLWT.c_str();
     devicePropertiesJsonDoc["online"] = false;
     devicePropertiesJsonDoc["bootcount"] = bootCount;
     devicePropertiesJsonDoc["hostname"] = WiFi.getHostname();
@@ -415,7 +417,9 @@ bool mqtt_connect()
 {
     if (client.connect(clientId.c_str(), "admin", "5617091"))
     {
-        devicePropertiesJsonDoc["wifiLocalIP"] = WiFi.localIP().toString().c_str();
+        static String ipCache;
+        ipCache = WiFi.localIP().toString();
+        devicePropertiesJsonDoc["wifiLocalIP"] = ipCache.c_str();
         devicePropertiesJsonDoc["online"] = true;
         devicePropertiesJsonDoc["bootcount"] = bootCount;
         devicePropertiesJsonDoc["hostname"] = WiFi.getHostname();
