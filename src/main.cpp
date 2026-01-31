@@ -100,7 +100,7 @@ void setup()
     String macAddress = WiFi.macAddress();
     macAddress.replace(":", "");  // Remove colons: F0:08:D1:D7:6D:F8 -> F008D1D76DF8
     clientId = "aircon_" + macAddress;
-    deviceTopic = "myFinalProject/aircon_" + macAddress + "/";
+    deviceTopic = "myFinalProject/airconController/" + clientId + "/";
 
     // Read boot count from Preferences
     Preferences prefs;
