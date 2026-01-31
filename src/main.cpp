@@ -446,7 +446,7 @@ bool mqtt_connect()
 
         // Subscribe to command topics
         static String commandTopic;
-        commandTopic = "myFinalProject/server/electricalAppliances/" + clientId + "/command";
+        commandTopic = "myFinalProject/server/airconController/" + clientId + "/command";
         client.subscribe(commandTopic.c_str(), 2);
         client.subscribe("myFinalProject/server/properties/online", 2);
 
