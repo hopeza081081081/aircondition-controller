@@ -92,21 +92,10 @@ void setup()
     WiFi.setAutoReconnect(true);
 
     // Device identification based on MAC address
-    if (WiFi.macAddress() == "F0:08:D1:D7:6D:F8")
-    {
-        clientId = "airconController3";
-        deviceTopic = "myFinalProject/airconController3/";
-    }
-    else if (WiFi.macAddress() == "8C:AA:B5:93:69:34")
-    {
-        clientId = "airconController2";
-        deviceTopic = "myFinalProject/airconController2/";
-    }
-    else if (WiFi.macAddress() == "8C:AA:B5:94:1E:5C")
-    {
-        clientId = "airconController1";
-        deviceTopic = "myFinalProject/airconController1/";
-    }
+    String macAddress = WiFi.macAddress();
+    macAddress.replace(":", "");  // Remove colons: F0:08:D1:D7:6D:F8 -> F008D1D76DF8
+    clientId = "aircon_" + macAddress;
+    deviceTopic = "myFinalProject/aircon_" + macAddress + "/";
 
     // Read boot count from Preferences
     Preferences prefs;
@@ -430,9 +419,9 @@ bool mqtt_connect()
         Serial.println("MQTT Connected");
 
         // Subscribe to command topics
-        client.subscribe("myFinalProject/server/electricalAppliances/airconController1/command", 2);
-        client.subscribe("myFinalProject/server/electricalAppliances/airconController2/command", 2);
-        client.subscribe("myFinalProject/server/electricalAppliances/airconController3/command", 2);
+        static String commandTopic;
+        commandTopic = "myFinalProject/server/electricalAppliances/" + clientId + "/command";
+        client.subscribe(commandTopic.c_str(), 2);
         client.subscribe("myFinalProject/server/properties/online", 2);
 
         Serial.printf("Boot count: %d\n", bootCount);
