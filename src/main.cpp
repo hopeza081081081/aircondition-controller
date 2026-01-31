@@ -242,7 +242,7 @@ void setup()
 void loop()
 {
     // Main loop is empty - all work is done in FreeRTOS tasks
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    vTaskDelay(10000 / portTICK_PERIOD_MS);
 }
 
 // ========== OTA Task ==========
