@@ -17,6 +17,7 @@
 #include <ArduinoOTA.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
+#include <time.h>
 
 #if !defined(PZEM_RX_PIN) && !defined(PZEM_TX_PIN)
 #define PZEM_RX_PIN 16
@@ -49,11 +50,15 @@ const unsigned long PZEM_READ_INTERVAL = 5000;                   // Read PZEM ev
 const unsigned long LED_BLINK_INTERVAL = 1000;                   // LED blink every 1 second
 const unsigned long WIFI_RECONNECT_TIMEOUT = 60000;              // 60 seconds
 const unsigned long MQTT_RECONNECT_TIMEOUT = 30000;              // 30 seconds
-const unsigned long AUTO_RESTART_INTERVAL = 12 * 60 * 60 * 1000; // 12 hours
 const int MAX_PZEM_ERRORS = 5;
 
+// NTP Configuration
+const char* ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = 7 * 3600;  // GMT+7 for Thailand
+const int daylightOffset_sec = 0;
+
 // Global variables for auto restart
-unsigned long bootMillis = 0;
+int lastRebootHour = -1;  // Track last reboot hour (-1 = not set yet)
 
 String clientId = "";
 String deviceTopic = "";
@@ -120,8 +125,8 @@ void setup()
 
     setup_wifi();
 
-    // Record boot time for auto restart
-    bootMillis = millis();
+    // Initialize NTP time synchronization
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
 
     client.begin(mqtt_server, mqtt_port, espClient);
     client.onMessage(on_message);
@@ -352,25 +357,46 @@ void handle_watchdog(void *parameter)
 {
     while (true)
     {
-        // Check for auto restart (every 12 hours)
-        unsigned long currentMillis = millis();
-        if (currentMillis - bootMillis >= AUTO_RESTART_INTERVAL)
+        // Get current time from NTP
+        struct tm timeinfo;
+        if (!getLocalTime(&timeinfo))
         {
-            Serial.println("========================================");
-            Serial.println("Watchdog: Auto restart triggered");
-            Serial.println("Reason: 12 hours uptime elapsed");
-            Serial.printf("Uptime: %lu ms (%.2f hours)\n",
-                          currentMillis - bootMillis,
-                          (currentMillis - bootMillis) / 3600000.0);
-            Serial.println("========================================");
+            Serial.println("Failed to obtain time, waiting for NTP sync...");
+        }
+        else
+        {
+            int currentHour = timeinfo.tm_hour;
+            int currentMinute = timeinfo.tm_min;
+            int currentSecond = timeinfo.tm_sec;
 
-            // Small delay to allow MQTT LWT to be sent
-            delay(1000);
-            ESP.restart();
+            // Check if we're at 06:00:00 or 18:00:00 and haven't rebooted this hour yet
+            // Use a small time window (within first 5 seconds of the minute) to avoid missing the exact moment
+            bool isRebootTime = ((currentHour == 6 || currentHour == 18) &&
+                                 currentMinute == 0 &&
+                                 currentSecond < 5 &&
+                                 lastRebootHour != currentHour);
+
+            if (isRebootTime)
+            {
+                lastRebootHour = currentHour;  // Mark this hour as rebooted
+
+                Serial.println("========================================");
+                Serial.println("Watchdog: Scheduled restart triggered");
+                Serial.printf("Reason: Scheduled reboot at %02d:00:00\n", currentHour);
+                Serial.printf("Current time: %02d:%02d:%02d\n",
+                              currentHour, currentMinute, currentSecond);
+                Serial.printf("Date: %04d-%02d-%02d\n",
+                              timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday);
+                Serial.println("========================================");
+
+                // Small delay to allow MQTT LWT to be sent
+                vTaskDelay(1000 / portTICK_PERIOD_MS);
+                ESP.restart();
+            }
         }
 
-        // Check every minute (no need to check frequently)
-        vTaskDelay(60000 / portTICK_PERIOD_MS); // 60 seconds
+        // Check every 10 seconds for precise timing
+        vTaskDelay(10000 / portTICK_PERIOD_MS);
     }
 }
 
