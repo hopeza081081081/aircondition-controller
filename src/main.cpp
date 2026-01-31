@@ -16,7 +16,7 @@
 #include <WiFiUdp.h>
 #include <ArduinoOTA.h>
 #include <ArduinoJson.h>
-#include <EEPROM.h>
+#include <Preferences.h>
 
 #if !defined(PZEM_RX_PIN) && !defined(PZEM_TX_PIN)
 #define PZEM_RX_PIN 16
@@ -108,16 +108,17 @@ void setup()
         deviceTopic = "myFinalProject/airconController1/";
     }
 
-    EEPROM.begin(4);
+    // Read boot count from Preferences
+    Preferences prefs;
+    prefs.begin("my-app", false);
+    bootCount = prefs.getUInt("bootcnt", 0);
+    bootCount++;
+    prefs.putUInt("bootcnt", bootCount);
+    prefs.end();
+
     pinMode(LED_BUILTIN, OUTPUT);
     pinMode(25, OUTPUT);
     digitalWrite(25, LOW);
-
-    // Read boot count
-    bootCount = EEPROM.read(0);
-    bootCount++;
-    EEPROM.write(0, bootCount);
-    EEPROM.commit();
 
     // Blink LED on startup
     for (int i = 0; i < 10; i++)
