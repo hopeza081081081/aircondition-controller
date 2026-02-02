@@ -46,31 +46,42 @@ const char *mqtt_server = "192.168.1.54";
 const int mqtt_port = 11883;*/
 
 // Timing constants (milliseconds)
-const unsigned long PZEM_READ_INTERVAL = 5000;                   // Read PZEM every 5 seconds
-const unsigned long LED_BLINK_INTERVAL = 1000;                   // LED blink every 1 second
-const unsigned long WIFI_RECONNECT_TIMEOUT = 60000;              // 60 seconds
-const unsigned long MQTT_RECONNECT_TIMEOUT = 30000;              // 30 seconds
+const unsigned long PZEM_READ_INTERVAL = 5000;      // Read PZEM every 5 seconds
+const unsigned long LED_BLINK_INTERVAL = 1000;      // LED blink every 1 second
+const unsigned long WIFI_RECONNECT_TIMEOUT = 60000; // 60 seconds
+const unsigned long MQTT_RECONNECT_TIMEOUT = 30000; // 30 seconds
 const int MAX_PZEM_ERRORS = 5;
 
 // NTP Configuration
-const char* ntpServer = "pool.ntp.org";
-const long gmtOffset_sec = 7 * 3600;  // GMT+7 for Thailand
+const char *ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = 7 * 3600; // GMT+7 for Thailand
 const int daylightOffset_sec = 0;
 
 // Global variables for auto restart
-int lastRebootHour = -1;  // Track last reboot hour (-1 = not set yet)
+int lastRebootHour = -1; // Track last reboot hour (-1 = not set yet)
 
 String clientId = "";
 String deviceTopic = "";
-const char* mqttUserName = "hrvmbcju";
-const char* mqttPassword = "g7usW2NJz0H_";
+const char *mqttUserName = "hrvmbcju";
+const char *mqttPassword = "g7usW2NJz0H_";
 float voltage, current, power, energy, frequency;
 int ledState = LOW, bootCount = 0, pzemErrorCount = 0;
 bool cmdFromServer = false, serverIsOnline = false;
 
 // Debug variables
 unsigned long lastDebugPrint = 0;
-const unsigned long DEBUG_PRINT_INTERVAL = 30000;  // Print debug info every 30 seconds
+const unsigned long DEBUG_PRINT_INTERVAL = 30000; // Print debug info every 30 seconds
+
+// Connection tracking
+unsigned long wifiDisconnectTime = 0;
+unsigned long mqttDisconnectTime = 0;
+int wifiDisconnectCount = 0;
+int mqttDisconnectCount = 0;
+bool lastWifiConnected = false;
+bool lastMqttConnected = false;
+
+// OTA state
+volatile bool otaInProgress = false;
 
 // JSON buffers
 const size_t electricalVariableJsonSize = JSON_OBJECT_SIZE(5);
@@ -98,6 +109,7 @@ void handle_watchdog(void *parameter);
 void readAndPublishPZEM();
 void printDebugInfo();
 String getResetReason(esp_reset_reason_t reason);
+void WiFiEvent(WiFiEvent_t event);
 
 void setup()
 {
@@ -106,7 +118,7 @@ void setup()
 
     // Device identification based on MAC address
     String macAddress = WiFi.macAddress();
-    macAddress.replace(":", "");  // Remove colons: F0:08:D1:D7:6D:F8 -> F008D1D76DF8
+    macAddress.replace(":", ""); // Remove colons: F0:08:D1:D7:6D:F8 -> F008D1D76DF8
     clientId = "aircon_" + macAddress;
     deviceTopic = "myFinalProject/airconController/" + clientId + "/";
 
@@ -147,6 +159,9 @@ void setup()
 
     setup_wifi();
 
+    // Register WiFi event handler
+    WiFi.onEvent(WiFiEvent);
+
     // Initialize NTP time synchronization
     configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
 
@@ -175,19 +190,51 @@ void setup()
     // Setup ArduinoOTA
     ArduinoOTA.onStart([]()
                        {
+        otaInProgress = true;
         String type;
         if (ArduinoOTA.getCommand() == U_FLASH)
             type = "sketch";
         else
             type = "filesystem";
-        Serial.println("Start updating " + type); })
+        Serial.println("========================================");
+        Serial.println("OTA UPDATE STARTED!");
+        Serial.printf("Update type: %s\n", type.c_str());
+        Serial.println("Suspending all other tasks...");
+        Serial.println("========================================");
+        // Suspend MQTT and PZEM tasks to free up resources
+        vTaskSuspend(mqttTask);
+        vTaskSuspend(pzemTask);
+        vTaskSuspend(ledTask);
+        vTaskSuspend(watchdogTask);
+        Serial.println("All tasks suspended. Giving full resources to OTA."); })
         .onEnd([]()
-               { Serial.println("\nEnd"); })
+               {
+        Serial.println("========================================");
+        Serial.println("OTA UPDATE COMPLETED!");
+        Serial.println("Resuming all tasks...");
+        Serial.println("========================================");
+        otaInProgress = false;
+        // Resume all suspended tasks
+        vTaskResume(mqttTask);
+        vTaskResume(pzemTask);
+        vTaskResume(ledTask);
+        vTaskResume(watchdogTask);
+        Serial.println("All tasks resumed. System ready.\n"); })
         .onProgress([](unsigned int progress, unsigned int total)
-                    { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); })
+                    {
+        // Less frequent progress updates to reduce overhead
+        static unsigned int lastProgress = 0;
+        unsigned int currentProgress = (progress / (total / 100));
+        if (currentProgress != lastProgress)
+        {
+            Serial.printf("OTA Progress: %u%%\n", currentProgress);
+            lastProgress = currentProgress;
+        } })
         .onError([](ota_error_t error)
                  {
-        Serial.printf("Error[%u]: ", error);
+        otaInProgress = false;
+        Serial.println("========================================");
+        Serial.printf("OTA ERROR[%u]: ", error);
         if (error == OTA_AUTH_ERROR)
             Serial.println("Auth Failed");
         else if (error == OTA_BEGIN_ERROR)
@@ -197,7 +244,15 @@ void setup()
         else if (error == OTA_RECEIVE_ERROR)
             Serial.println("Receive Failed");
         else if (error == OTA_END_ERROR)
-            Serial.println("End Failed"); });
+            Serial.println("End Failed");
+        Serial.println("Resuming all tasks after error...");
+        Serial.println("========================================");
+        // Resume all tasks even after error
+        vTaskResume(mqttTask);
+        vTaskResume(pzemTask);
+        vTaskResume(ledTask);
+        vTaskResume(watchdogTask);
+        Serial.println("All tasks resumed after error.\n"); });
 
     ArduinoOTA.begin();
 
@@ -207,53 +262,53 @@ void setup()
     xTaskCreatePinnedToCore(
         &handle_ota,
         "OTA_Handler",
-        8096,
+        8192, // Increased stack for OTA
         NULL,
-        3, // Highest priority
+        5, // Maximum priority - ensure OTA gets highest priority
         &otaTask,
         0 // Core 0
     );
 
-    // MQTT Task - High priority, Core 1
+    // MQTT Task - Medium priority, Core 1
     xTaskCreatePinnedToCore(
         &handle_mqtt,
         "MQTT_Handler",
         8096,
         NULL,
-        2, // High priority
+        2, // Medium priority (lower than OTA)
         &mqttTask,
         1 // Core 1
     );
 
-    // PZEM Task - Medium priority, Core 1
+    // PZEM Task - Low priority, Core 1
     xTaskCreatePinnedToCore(
         &handle_pzem,
         "PZEM_Handler",
         4096,
         NULL,
-        1, // Medium priority
+        1, // Low priority
         &pzemTask,
         1 // Core 1
     );
 
-    // LED Task - Low priority, Core 0
+    // LED Task - Lowest priority, Core 0
     xTaskCreatePinnedToCore(
         &handle_led,
         "LED_Handler",
         2048,
         NULL,
-        1, // Low priority
+        1, // Lowest priority
         &ledTask,
         0 // Core 0
     );
 
-    // Watchdog Task - Low priority, Core 0
+    // Watchdog Task - Lowest priority, Core 0
     xTaskCreatePinnedToCore(
         &handle_watchdog,
         "Watchdog_Handler",
         2048,
         NULL,
-        1, // Low priority
+        1, // Lowest priority
         &watchdogTask,
         0 // Core 0
     );
@@ -273,7 +328,16 @@ void handle_ota(void *parameter)
     while (true)
     {
         ArduinoOTA.handle();
-        vTaskDelay(10 / portTICK_PERIOD_MS); // Check OTA every 10ms
+
+        // During OTA, reduce delay to handle more frequently
+        if (otaInProgress)
+        {
+            vTaskDelay(1 / portTICK_PERIOD_MS); // Check every 1ms during OTA
+        }
+        else
+        {
+            vTaskDelay(10 / portTICK_PERIOD_MS); // Check every 10ms normally
+        }
     }
 }
 
@@ -283,6 +347,63 @@ void handle_mqtt(void *parameter)
     while (true)
     {
         client.loop();
+
+        bool currentWifiConnected = (WiFi.status() == WL_CONNECTED);
+        bool currentMqttConnected = client.connected();
+
+        // Track WiFi connection changes
+        if (currentWifiConnected != lastWifiConnected)
+        {
+            if (!currentWifiConnected)
+            {
+                // WiFi just disconnected
+                wifiDisconnectCount++;
+                wifiDisconnectTime = millis();
+                Serial.println("========================================");
+                Serial.println("WiFi DISCONNECTED!");
+                Serial.printf("WiFi Disconnect Count: %d\n", wifiDisconnectCount);
+                Serial.printf("Time: %lu ms\n", millis());
+                Serial.println("========================================");
+            }
+            else
+            {
+                // WiFi just reconnected
+                unsigned long downtime = millis() - wifiDisconnectTime;
+                Serial.println("========================================");
+                Serial.println("WiFi RECONNECTED!");
+                Serial.printf("Downtime: %lu ms (%.1f seconds)\n", downtime, downtime / 1000.0);
+                Serial.printf("RSSI: %d dBm\n", WiFi.RSSI());
+                Serial.println("========================================");
+            }
+            lastWifiConnected = currentWifiConnected;
+        }
+
+        // Track MQTT connection changes
+        if (currentMqttConnected != lastMqttConnected)
+        {
+            if (!currentMqttConnected)
+            {
+                // MQTT just disconnected
+                mqttDisconnectCount++;
+                mqttDisconnectTime = millis();
+                Serial.println("========================================");
+                Serial.println("MQTT DISCONNECTED!");
+                Serial.printf("MQTT Disconnect Count: %d\n", mqttDisconnectCount);
+                Serial.printf("Time: %lu ms\n", millis());
+                Serial.printf("WiFi Status: %s\n", currentWifiConnected ? "Connected" : "Disconnected");
+                Serial.println("========================================");
+            }
+            else
+            {
+                // MQTT just reconnected
+                unsigned long downtime = millis() - mqttDisconnectTime;
+                Serial.println("========================================");
+                Serial.println("MQTT RECONNECTED!");
+                Serial.printf("Downtime: %lu ms (%.1f seconds)\n", downtime, downtime / 1000.0);
+                Serial.println("========================================");
+            }
+            lastMqttConnected = currentMqttConnected;
+        }
 
         // Check connection and reconnect if needed
         if (!client.connected())
@@ -432,7 +553,7 @@ void handle_watchdog(void *parameter)
 
             if (isRebootTime)
             {
-                lastRebootHour = currentHour;  // Mark this hour as rebooted
+                lastRebootHour = currentHour; // Mark this hour as rebooted
 
                 Serial.println("========================================");
                 Serial.println("Watchdog: Scheduled restart triggered");
@@ -553,10 +674,12 @@ void printDebugInfo()
     Serial.printf("RSSI: %d dBm\n", WiFi.RSSI());
     Serial.printf("IP: %s\n", WiFi.localIP().toString().c_str());
     Serial.printf("Connected: %s\n", WiFi.status() == WL_CONNECTED ? "Yes" : "No");
+    Serial.printf("Disconnect Count: %d\n", wifiDisconnectCount);
 
     // MQTT Status
     Serial.println("--- MQTT ---");
     Serial.printf("Connected: %s\n", client.connected() ? "Yes" : "No");
+    Serial.printf("Disconnect Count: %d\n", mqttDisconnectCount);
     if (!client.connected())
     {
         Serial.printf("Last Error: %d\n", client.lastError());
@@ -582,10 +705,36 @@ void printDebugInfo()
 
     // Task Status
     Serial.println("--- Tasks ---");
-    Serial.printf("Uptime: %lu ms\n", millis());
+    Serial.printf("Uptime: %lu ms (%.1f sec)\n", millis(), millis() / 1000.0);
     Serial.printf("Boot Count: %d\n", bootCount);
 
     Serial.println("========================================");
+}
+
+// WiFi Event Handler
+void WiFiEvent(WiFiEvent_t event)
+{
+    Serial.printf("[WiFi Event] Event: %d - ", event);
+
+    switch (event)
+    {
+    case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+        Serial.println("WiFi Connected to AP");
+        break;
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+        Serial.println("WiFi Disconnected from AP");
+        break;
+    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+        Serial.println("WiFi Got IP");
+        Serial.printf("IP: %s\n", WiFi.localIP().toString().c_str());
+        break;
+    case ARDUINO_EVENT_WIFI_STA_LOST_IP:
+        Serial.println("WiFi Lost IP");
+        break;
+    default:
+        Serial.printf("Other event: %d\n", event);
+        break;
+    }
 }
 
 String getResetReason(esp_reset_reason_t reason)
