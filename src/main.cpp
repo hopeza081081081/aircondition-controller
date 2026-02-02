@@ -60,6 +60,9 @@ const int daylightOffset_sec = 0;
 // Global variables for auto restart
 int lastRebootHour = -1;  // Track last reboot hour (-1 = not set yet)
 
+// OTA control flag
+volatile bool otaInProgress = false;  // Flag to indicate OTA is in progress
+
 String clientId = "";
 String deviceTopic = "";
 float voltage, current, power, energy, frequency;
@@ -154,6 +157,19 @@ void setup()
     // Setup ArduinoOTA
     ArduinoOTA.onStart([]()
                        {
+        otaInProgress = true;
+        Serial.println("========================================");
+        Serial.println("OTA Started - Suspending all tasks...");
+
+        // Suspend all other tasks to give full resources to OTA
+        if (mqttTask != NULL) vTaskSuspend(mqttTask);
+        if (pzemTask != NULL) vTaskSuspend(pzemTask);
+        if (ledTask != NULL) vTaskSuspend(ledTask);
+        if (watchdogTask != NULL) vTaskSuspend(watchdogTask);
+
+        Serial.println("All tasks suspended. OTA has full control.");
+        Serial.println("========================================");
+
         String type;
         if (ArduinoOTA.getCommand() == U_FLASH)
             type = "sketch";
@@ -161,7 +177,11 @@ void setup()
             type = "filesystem";
         Serial.println("Start updating " + type); })
         .onEnd([]()
-               { Serial.println("\nEnd"); })
+               {
+        Serial.println("\n========================================");
+        Serial.println("OTA Completed successfully!");
+        Serial.println("========================================");
+        otaInProgress = false; })
         .onProgress([](unsigned int progress, unsigned int total)
                     { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); })
         .onError([](ota_error_t error)
@@ -176,7 +196,16 @@ void setup()
         else if (error == OTA_RECEIVE_ERROR)
             Serial.println("Receive Failed");
         else if (error == OTA_END_ERROR)
-            Serial.println("End Failed"); });
+            Serial.println("End Failed");
+
+        // On error, resume tasks so device can continue operating
+        Serial.println("OTA Error - Resuming all tasks...");
+        if (mqttTask != NULL) vTaskResume(mqttTask);
+        if (pzemTask != NULL) vTaskResume(pzemTask);
+        if (ledTask != NULL) vTaskResume(ledTask);
+        if (watchdogTask != NULL) vTaskResume(watchdogTask);
+        otaInProgress = false;
+        Serial.println("========================================"); });
 
     ArduinoOTA.begin();
 
@@ -249,9 +278,33 @@ void loop()
 // ========== OTA Task ==========
 void handle_ota(void *parameter)
 {
+    bool wasOtaActive = false;
+
     while (true)
     {
         ArduinoOTA.handle();
+
+        // Track OTA state changes
+        if (otaInProgress && !wasOtaActive)
+        {
+            // OTA just started
+            wasOtaActive = true;
+            Serial.println("OTA Handler: OTA in progress detected");
+        }
+        else if (!otaInProgress && wasOtaActive)
+        {
+            // OTA just finished successfully
+            wasOtaActive = false;
+            Serial.println("========================================");
+            Serial.println("OTA Handler: OTA finished - Resuming all tasks...");
+            if (mqttTask != NULL) vTaskResume(mqttTask);
+            if (pzemTask != NULL) vTaskResume(pzemTask);
+            if (ledTask != NULL) vTaskResume(ledTask);
+            if (watchdogTask != NULL) vTaskResume(watchdogTask);
+            Serial.println("All tasks resumed. Normal operation restored.");
+            Serial.println("========================================");
+        }
+
         vTaskDelay(10 / portTICK_PERIOD_MS); // Check OTA every 10ms
     }
 }
@@ -261,6 +314,13 @@ void handle_mqtt(void *parameter)
 {
     while (true)
     {
+        // Skip all work if OTA is in progress
+        if (otaInProgress)
+        {
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+            continue;
+        }
+
         client.loop();
 
         // Check connection and reconnect if needed
@@ -288,6 +348,13 @@ void handle_pzem(void *parameter)
 {
     while (true)
     {
+        // Skip all work if OTA is in progress
+        if (otaInProgress)
+        {
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            continue;
+        }
+
         readAndPublishPZEM();
         vTaskDelay(PZEM_READ_INTERVAL / portTICK_PERIOD_MS); // Read every 5 seconds
     }
@@ -344,6 +411,13 @@ void handle_led(void *parameter)
 
     while (true)
     {
+        // Skip all work if OTA is in progress
+        if (otaInProgress)
+        {
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+            continue;
+        }
+
         unsigned long currentMillis = millis();
 
         if (currentMillis - previousMillis >= LED_BLINK_INTERVAL)
@@ -362,6 +436,13 @@ void handle_watchdog(void *parameter)
 {
     while (true)
     {
+        // Skip all work if OTA is in progress (don't restart during OTA!)
+        if (otaInProgress)
+        {
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            continue;
+        }
+
         // Get current time from NTP
         struct tm timeinfo;
         if (!getLocalTime(&timeinfo))
