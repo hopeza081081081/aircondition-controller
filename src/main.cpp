@@ -68,6 +68,10 @@ float voltage, current, power, energy, frequency;
 int ledState = LOW, bootCount = 0, pzemErrorCount = 0;
 bool cmdFromServer = false, serverIsOnline = false;
 
+// Debug variables
+unsigned long lastDebugPrint = 0;
+const unsigned long DEBUG_PRINT_INTERVAL = 30000;  // Print debug info every 30 seconds
+
 // JSON buffers
 const size_t electricalVariableJsonSize = JSON_OBJECT_SIZE(5);
 char electricalVariableJsonOutput[JSON_OBJECT_SIZE(5) + 80];
@@ -92,6 +96,8 @@ void handle_pzem(void *parameter);
 void handle_led(void *parameter);
 void handle_watchdog(void *parameter);
 void readAndPublishPZEM();
+void printDebugInfo();
+String getResetReason(esp_reset_reason_t reason);
 
 void setup()
 {
@@ -115,6 +121,20 @@ void setup()
     pinMode(LED_BUILTIN, OUTPUT);
     pinMode(25, OUTPUT);
     digitalWrite(25, LOW);
+
+    // Print reset reason for debugging
+    Serial.println("========================================");
+    Serial.println("ESP32 Reset Info:");
+    Serial.print("Reset Reason: ");
+    Serial.println(getResetReason(esp_reset_reason()));
+    Serial.printf("Boot Count: %d\n", bootCount);
+    Serial.printf("Free Heap: %u bytes\n", ESP.getFreeHeap());
+    Serial.printf("Heap Size: %u bytes\n", ESP.getHeapSize());
+    Serial.printf("Free PSRAM: %u bytes\n", ESP.getFreePsram());
+    Serial.printf("Chip Model: %s\n", ESP.getChipModel());
+    Serial.printf("Chip Cores: %d\n", ESP.getChipCores());
+    Serial.printf("CPU Freq: %d MHz\n", ESP.getCpuFreqMHz());
+    Serial.println("========================================");
 
     // Blink LED on startup
     for (int i = 0; i < 10; i++)
@@ -273,11 +293,24 @@ void handle_mqtt(void *parameter)
             if (now - lastAttempt >= 5000) // Try to reconnect every 5 seconds
             {
                 lastAttempt = now;
+                Serial.println("MQTT disconnected, attempting to reconnect...");
+                Serial.printf("WiFi Status: %d\n", WiFi.status());
+                Serial.printf("RSSI: %d dBm\n", WiFi.RSSI());
+                Serial.printf("Free Heap: %u bytes\n", ESP.getFreeHeap());
                 if (!mqtt_connect())
                 {
                     // Connection failed
+                    Serial.println("MQTT reconnection failed");
                 }
             }
+        }
+
+        // Print debug info periodically
+        unsigned long now = millis();
+        if (now - lastDebugPrint >= DEBUG_PRINT_INTERVAL)
+        {
+            lastDebugPrint = now;
+            printDebugInfo();
         }
 
         vTaskDelay(50 / portTICK_PERIOD_MS); // Check MQTT every 50ms
@@ -300,12 +333,31 @@ void readAndPublishPZEM()
     if (Serial2.available() != 0)
     {
         pzemErrorCount++;
-        Serial.printf("PZEM Error Count: %d\n", pzemErrorCount);
+        Serial.println("========================================");
+        Serial.println("PZEM ERROR DETECTED!");
+        Serial.printf("PZEM Error Count: %d / %d\n", pzemErrorCount, MAX_PZEM_ERRORS);
+        Serial.printf("Serial2 available: %d bytes\n", Serial2.available());
+        Serial.printf("Free Heap: %u bytes\n", ESP.getFreeHeap());
+        Serial.printf("WiFi RSSI: %d dBm\n", WiFi.RSSI());
+
+        // Clear the buffer to prevent accumulation
+        while (Serial2.available() > 0)
+        {
+            int c = Serial2.read();
+            Serial.printf("Clearing byte: 0x%02X\n", c);
+        }
+
         if (pzemErrorCount >= MAX_PZEM_ERRORS)
         {
+            Serial.println("========================================");
             Serial.println("Too many PZEM errors, restarting...");
+            Serial.printf("Final Error Count: %d\n", pzemErrorCount);
+            Serial.printf("Uptime before restart: %lu ms\n", millis());
+            Serial.println("========================================");
+            delay(1000);
             ESP.restart();
         }
+        Serial.println("========================================");
     }
 
     // Read all values from PZEM
@@ -428,6 +480,11 @@ void setup_wifi()
     Serial.println("WiFi connected");
     Serial.println("IP address: ");
     Serial.println(WiFi.localIP());
+    Serial.printf("Gateway: %s\n", WiFi.gatewayIP().toString().c_str());
+    Serial.printf("Subnet Mask: %s\n", WiFi.subnetMask().toString().c_str());
+    Serial.printf("DNS: %s\n", WiFi.dnsIP().toString().c_str());
+    Serial.printf("RSSI: %d dBm\n", WiFi.RSSI());
+    Serial.printf("WiFi Channel: %d\n", WiFi.channel());
 }
 
 // ========== MQTT Functions ==========
@@ -482,4 +539,80 @@ void on_message(String &topic, String &payload)
 
     // Update GPIO based on server status and command
     digitalWrite(25, (serverIsOnline && cmdFromServer) ? HIGH : LOW);
+}
+
+// ========== Debug Functions ==========
+void printDebugInfo()
+{
+    Serial.println("========================================");
+    Serial.println("DEBUG INFO:");
+
+    // WiFi Status
+    Serial.println("--- WiFi ---");
+    Serial.printf("Status: %d\n", WiFi.status());
+    Serial.printf("RSSI: %d dBm\n", WiFi.RSSI());
+    Serial.printf("IP: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("Connected: %s\n", WiFi.status() == WL_CONNECTED ? "Yes" : "No");
+
+    // MQTT Status
+    Serial.println("--- MQTT ---");
+    Serial.printf("Connected: %s\n", client.connected() ? "Yes" : "No");
+    if (!client.connected())
+    {
+        Serial.printf("Last Error: %d\n", client.lastError());
+    }
+
+    // Memory Status
+    Serial.println("--- Memory ---");
+    Serial.printf("Free Heap: %u bytes\n", ESP.getFreeHeap());
+    Serial.printf("Largest Free Block: %u bytes\n", ESP.getMaxAllocHeap());
+    Serial.printf("Heap Size: %u bytes\n", ESP.getHeapSize());
+    if (ESP.getPsramSize() > 0)
+    {
+        Serial.printf("Free PSRAM: %u bytes\n", ESP.getFreePsram());
+        Serial.printf("PSRAM Size: %u bytes\n", ESP.getPsramSize());
+    }
+
+    // PZEM Status
+    Serial.println("--- PZEM ---");
+    Serial.printf("Error Count: %d / %d\n", pzemErrorCount, MAX_PZEM_ERRORS);
+    Serial.printf("Voltage: %.2f V\n", voltage);
+    Serial.printf("Current: %.2f A\n", current);
+    Serial.printf("Power: %.2f W\n", power);
+
+    // Task Status
+    Serial.println("--- Tasks ---");
+    Serial.printf("Uptime: %lu ms\n", millis());
+    Serial.printf("Boot Count: %d\n", bootCount);
+
+    Serial.println("========================================");
+}
+
+String getResetReason(esp_reset_reason_t reason)
+{
+    switch (reason)
+    {
+    case ESP_RST_POWERON:
+        return "Power on reset (not due to crash)";
+    case ESP_RST_EXT:
+        return "External reset";
+    case ESP_RST_SW:
+        return "Software reset via ESP.restart()";
+    case ESP_RST_PANIC:
+        return "Software reset due to exception/panic";
+    case ESP_RST_INT_WDT:
+        return "Reset (interrupted watchdog)";
+    case ESP_RST_TASK_WDT:
+        return "Reset (task watchdog)";
+    case ESP_RST_WDT:
+        return "Reset (other watchdog)";
+    case ESP_RST_DEEPSLEEP:
+        return "Reset after exiting deep sleep mode";
+    case ESP_RST_BROWNOUT:
+        return "Brownout reset (voltage dropped too low)";
+    case ESP_RST_SDIO:
+        return "Reset over SDIO";
+    default:
+        return "Unknown reset reason";
+    }
 }
