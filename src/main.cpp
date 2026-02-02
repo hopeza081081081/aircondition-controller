@@ -62,8 +62,8 @@ int lastRebootHour = -1; // Track last reboot hour (-1 = not set yet)
 
 String clientId = "";
 String deviceTopic = "";
-const char *mqttUserName = "hrvmbcju";
-const char *mqttPassword = "g7usW2NJz0H_";
+const char *mqttUserName = "admin";
+const char *mqttPassword = "5617091";
 float voltage, current, power, energy, frequency;
 int ledState = LOW, bootCount = 0, pzemErrorCount = 0;
 bool cmdFromServer = false, serverIsOnline = false;
@@ -336,7 +336,7 @@ void handle_ota(void *parameter)
         }
         else
         {
-            vTaskDelay(10 / portTICK_PERIOD_MS); // Check every 10ms normally
+            vTaskDelay(1000 / portTICK_PERIOD_MS); // Check every 10ms normally
         }
     }
 }
