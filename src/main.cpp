@@ -67,8 +67,8 @@ int ledState = LOW, bootCount = 0, pzemErrorCount = 0;
 bool cmdFromServer = false, serverIsOnline = false;
 
 // JSON buffers
-const size_t electricalVariableJsonSize = JSON_OBJECT_SIZE(5);
-char electricalVariableJsonOutput[JSON_OBJECT_SIZE(5) + 80];
+const size_t electricalVariableJsonSize = JSON_OBJECT_SIZE(6);  // Added RSSI
+char electricalVariableJsonOutput[JSON_OBJECT_SIZE(6) + 100];
 
 const size_t devicePropertiesJsonSize = JSON_OBJECT_SIZE(4); // Increased for hostname
 char devicePropertiesJsonOutput[JSON_OBJECT_SIZE(4) + 100];
@@ -149,6 +149,7 @@ void setup()
     electricalVariableJsonDoc["power"] = "null";
     electricalVariableJsonDoc["energy"] = "null";
     electricalVariableJsonDoc["frequency"] = "null";
+    electricalVariableJsonDoc["rssi"] = 0;
 
     // Setup ArduinoOTA
     ArduinoOTA.onStart([]()
@@ -322,6 +323,10 @@ void readAndPublishPZEM()
     frequency = pzem.frequency();
     electricalVariableJsonDoc["frequency"] = isnan(frequency) ? 0.0 : frequency;
 
+    // Read WiFi RSSI
+    int rssi = WiFi.RSSI();
+    electricalVariableJsonDoc["rssi"] = rssi;
+
     // Publish to MQTT
     serializeJson(electricalVariableJsonDoc, electricalVariableJsonOutput);
 
@@ -408,6 +413,7 @@ void setup_wifi()
     Serial.println(ssid);
 
     WiFi.begin(ssid, password);
+    WiFi.setSleep(false);  // Disable WiFi low-power mode for stable connection
 
     unsigned long startMillis = millis();
     while (WiFi.status() != WL_CONNECTED)
