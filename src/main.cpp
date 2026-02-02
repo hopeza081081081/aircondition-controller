@@ -46,22 +46,22 @@ const char *mqtt_server = "192.168.1.54";
 const int mqtt_port = 11883;*/
 
 // Timing constants (milliseconds)
-const unsigned long PZEM_READ_INTERVAL = 5000;                   // Read PZEM every 5 seconds
-const unsigned long LED_BLINK_INTERVAL = 1000;                   // LED blink every 1 second
-const unsigned long WIFI_RECONNECT_TIMEOUT = 60000;              // 60 seconds
-const unsigned long MQTT_RECONNECT_TIMEOUT = 30000;              // 30 seconds
+const unsigned long PZEM_READ_INTERVAL = 5000;      // Read PZEM every 5 seconds
+const unsigned long LED_BLINK_INTERVAL = 1000;      // LED blink every 1 second
+const unsigned long WIFI_RECONNECT_TIMEOUT = 60000; // 60 seconds
+const unsigned long MQTT_RECONNECT_TIMEOUT = 30000; // 30 seconds
 const int MAX_PZEM_ERRORS = 5;
 
 // NTP Configuration
-const char* ntpServer = "pool.ntp.org";
-const long gmtOffset_sec = 7 * 3600;  // GMT+7 for Thailand
+const char *ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = 7 * 3600; // GMT+7 for Thailand
 const int daylightOffset_sec = 0;
 
 // Global variables for auto restart
-int lastRebootHour = -1;  // Track last reboot hour (-1 = not set yet)
+int lastRebootHour = -1; // Track last reboot hour (-1 = not set yet)
 
 // OTA control flag
-volatile bool otaInProgress = false;  // Flag to indicate OTA is in progress
+volatile bool otaInProgress = false; // Flag to indicate OTA is in progress
 
 String clientId = "";
 String deviceTopic = "";
@@ -70,7 +70,7 @@ int ledState = LOW, bootCount = 0, pzemErrorCount = 0;
 bool cmdFromServer = false, serverIsOnline = false;
 
 // JSON buffers
-const size_t electricalVariableJsonSize = JSON_OBJECT_SIZE(6);  // Added RSSI
+const size_t electricalVariableJsonSize = JSON_OBJECT_SIZE(6); // Added RSSI
 char electricalVariableJsonOutput[JSON_OBJECT_SIZE(6) + 100];
 
 const size_t devicePropertiesJsonSize = JSON_OBJECT_SIZE(4); // Increased for hostname
@@ -101,7 +101,7 @@ void setup()
 
     // Device identification based on MAC address
     String macAddress = WiFi.macAddress();
-    macAddress.replace(":", "");  // Remove colons: F0:08:D1:D7:6D:F8 -> F008D1D76DF8
+    macAddress.replace(":", ""); // Remove colons: F0:08:D1:D7:6D:F8 -> F008D1D76DF8
     clientId = "aircon_" + macAddress;
     deviceTopic = "myFinalProject/airconController/" + clientId + "/";
 
@@ -297,10 +297,14 @@ void handle_ota(void *parameter)
             wasOtaActive = false;
             Serial.println("========================================");
             Serial.println("OTA Handler: OTA finished - Resuming all tasks...");
-            if (mqttTask != NULL) vTaskResume(mqttTask);
-            if (pzemTask != NULL) vTaskResume(pzemTask);
-            if (ledTask != NULL) vTaskResume(ledTask);
-            if (watchdogTask != NULL) vTaskResume(watchdogTask);
+            if (mqttTask != NULL)
+                vTaskResume(mqttTask);
+            if (pzemTask != NULL)
+                vTaskResume(pzemTask);
+            if (ledTask != NULL)
+                vTaskResume(ledTask);
+            if (watchdogTask != NULL)
+                vTaskResume(watchdogTask);
             Serial.println("All tasks resumed. Normal operation restored.");
             Serial.println("========================================");
         }
@@ -464,7 +468,7 @@ void handle_watchdog(void *parameter)
 
             if (isRebootTime)
             {
-                lastRebootHour = currentHour;  // Mark this hour as rebooted
+                lastRebootHour = currentHour; // Mark this hour as rebooted
 
                 Serial.println("========================================");
                 Serial.println("Watchdog: Scheduled restart triggered");
@@ -494,7 +498,7 @@ void setup_wifi()
     Serial.println(ssid);
 
     WiFi.begin(ssid, password);
-    WiFi.setSleep(false);  // Disable WiFi low-power mode for stable connection
+    WiFi.setSleep(false); // Disable WiFi low-power mode for stable connection
 
     unsigned long startMillis = millis();
     while (WiFi.status() != WL_CONNECTED)
