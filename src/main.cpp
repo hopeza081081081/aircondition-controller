@@ -58,7 +58,7 @@ const long gmtOffset_sec = 7 * 3600; // GMT+7 for Thailand
 const int daylightOffset_sec = 0;
 
 // Global variables for auto restart
-int lastRebootHour = -1; // Track last reboot hour (-1 = not set yet)
+uint32_t lastRebootToken = 0; // Persisted last reboot marker (yyyymmddHH)
 
 // OTA control flag
 volatile bool otaInProgress = false; // Flag to indicate OTA is in progress
@@ -111,6 +111,7 @@ void setup()
     bootCount = prefs.getUInt("bootcnt", 0);
     bootCount++;
     prefs.putUInt("bootcnt", bootCount);
+    lastRebootToken = prefs.getUInt("lastreboot", 0);
     prefs.end();
 
     pinMode(LED_BUILTIN, OUTPUT);
@@ -458,35 +459,58 @@ void handle_watchdog(void *parameter)
             int currentHour = timeinfo.tm_hour;
             int currentMinute = timeinfo.tm_min;
             int currentSecond = timeinfo.tm_sec;
+            int currentYear = timeinfo.tm_year + 1900;
+            int currentMonth = timeinfo.tm_mon + 1;
+            int currentDay = timeinfo.tm_mday;
 
-            // Check if we're at 06:00:00 or 18:00:00 and haven't rebooted this hour yet
-            // Use a small time window (within first 5 seconds of the minute) to avoid missing the exact moment
-            bool isRebootTime = ((currentHour == 6 || currentHour == 18) &&
-                                 currentMinute == 0 &&
-                                 currentSecond < 5 &&
-                                 lastRebootHour != currentHour);
-
-            if (isRebootTime)
+            // If time looks invalid (not synced yet), skip reboot logic
+            if (currentYear < 2020)
             {
-                lastRebootHour = currentHour; // Mark this hour as rebooted
+                Serial.println("NTP time not valid yet, skipping scheduled restart check...");
+            }
+            else
+            {
+                // Build a unique token per hour: yyyymmddHH
+                uint32_t rebootToken = (uint32_t)(currentYear * 1000000UL +
+                                                  currentMonth * 10000UL +
+                                                  currentDay * 100UL +
+                                                  currentHour);
 
-                Serial.println("========================================");
-                Serial.println("Watchdog: Scheduled restart triggered");
-                Serial.printf("Reason: Scheduled reboot at %02d:00:00\n", currentHour);
-                Serial.printf("Current time: %02d:%02d:%02d\n",
-                              currentHour, currentMinute, currentSecond);
-                Serial.printf("Date: %04d-%02d-%02d\n",
-                              timeinfo.tm_year + 1900, timeinfo.tm_mon + 1, timeinfo.tm_mday);
-                Serial.println("========================================");
+                // Check if we're at 06:00:00 or 18:00:00 and haven't rebooted this hour+day yet
+                // Use a small time window (within first 10 seconds of the minute) to avoid missing the exact moment
+                bool isRebootTime = ((currentHour == 6 || currentHour == 18) &&
+                                     currentMinute == 0 &&
+                                     currentSecond < 10 &&
+                                     lastRebootToken != rebootToken);
 
-                // Small delay to allow MQTT LWT to be sent
-                vTaskDelay(1000 / portTICK_PERIOD_MS);
-                ESP.restart();
+                if (isRebootTime)
+                {
+                    lastRebootToken = rebootToken; // Mark this hour as rebooted
+
+                    // Persist last reboot token to avoid reboot loops after restart
+                    Preferences prefs;
+                    prefs.begin("my-app", false);
+                    prefs.putUInt("lastreboot", lastRebootToken);
+                    prefs.end();
+
+                    Serial.println("========================================");
+                    Serial.println("Watchdog: Scheduled restart triggered");
+                    Serial.printf("Reason: Scheduled reboot at %02d:00:00\n", currentHour);
+                    Serial.printf("Current time: %02d:%02d:%02d\n",
+                                  currentHour, currentMinute, currentSecond);
+                    Serial.printf("Date: %04d-%02d-%02d\n",
+                                  currentYear, currentMonth, currentDay);
+                    Serial.println("========================================");
+
+                    // Small delay to allow MQTT LWT to be sent
+                    vTaskDelay(1000 / portTICK_PERIOD_MS);
+                    ESP.restart();
+                }
             }
         }
 
-        // Check every 10 seconds for precise timing
-        vTaskDelay(10000 / portTICK_PERIOD_MS);
+        // Check every 1 second for precise timing
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
 
